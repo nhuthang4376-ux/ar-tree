@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AR Tree & Sun Simulation</title>
+    <!-- Tailwind CSS cho UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- SunCalc library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #2c3e50; font-family: sans-serif; }
+        #ui-container {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            padding: 20px; box-sizing: border-box;
+            background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0));
+            z-index: 10;
+            pointer-events: none; /* Ngăn container block cảm ứng màn hình */
+        }
+        .ar-mode #ui-container { padding-bottom: 70px; }
+        
+        .control-group { pointer-events: auto; margin-bottom: 15px; }
+        .control-group label { color: white; display: block; margin-bottom: 5px; font-weight: bold; text-shadow: 1px 1px 2px black; font-size: 14px; }
+        /* Thêm touch-action và pointer-events để chống freeze thanh trượt trên iOS */
+        input[type=range] { width: 100%; accent-color: #4ade80; pointer-events: auto; touch-action: pan-x; }
+        
+        #info-panel {
+            position: absolute; top: 10px; left: 10px; right: 10px;
+            background: rgba(0, 0, 0, 0.6); color: white;
+            padding: 10px; border-radius: 8px; font-size: 14px;
+            pointer-events: auto; z-index: 10;
+            backdrop-filter: blur(4px);
+        }
+        
+        #desktop-hint {
+            position: absolute; top: 100px; left: 10px; right: 10px;
+            text-align: center; color: rgba(255,255,255,0.7); pointer-events: none;
+            font-size: 13px; z-index: 5;
+        }
+        #compass-btn {
+            background-color: #3b82f6; color: white; padding: 10px 15px; border-radius: 8px;
+            font-weight: bold; margin-top: 10px; pointer-events: auto; cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3); border: none; width: 100%;
+        }
+        .dim-badge {
+            background: rgba(0,0,0,0.8); color: #4ade80; padding: 2px 6px; border-radius: 4px;
+            font-family: monospace; font-size: 12px; margin-right: 5px; border: 1px solid #4ade80;
+        }
+    </style>
+
+    <!-- Import bản đồ cho Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <!-- Bảng thông tin -->
+    <div id="info-panel">
+        <div class="font-bold border-b border-gray-500 pb-1 mb-1 text-green-400">Dữ Liệu Ánh Sáng <span id="loading-gps" class="text-xs text-yellow-400 font-normal ml-2">(Đang định vị...)</span></div>
+        <div>Tọa độ: <span id="loc-display">Đang tải...</span></div>
+        <div>La bàn: <span id="compass-display" class="text-blue-300">Chưa cấp quyền</span> (Auto)</div>
+        <div>Thời gian mô phỏng: <span id="time-display" class="font-bold text-lg text-yellow-300">12:00</span></div>
+        
+        <div class="font-bold border-b border-gray-500 pb-1 mb-1 mt-2 text-purple-400">Kích Thước 3D (Bounding Box)</div>
+        <div class="flex mt-1">
+            <span class="dim-badge">Rộng: <span id="dim-x">0.00</span>m</span>
+            <span class="dim-badge">Cao: <span id="dim-y">0.00</span>m</span>
+            <span class="dim-badge">Sâu: <span id="dim-z">0.00</span>m</span>
+        </div>
+
+        <button id="compass-btn">Kích hoạt La bàn (Bắt buộc cho iOS)</button>
+        <div id="ar-hint" class="text-xs text-gray-300 mt-2 hidden">*AR: Chạm vào mặt phẳng có dấu tròn để đặt cây. Nhìn lên trời để thấy quỹ đạo nắng.</div>
+    </div>
+
+    <div id="desktop-hint">Dùng chuột để xoay/thu phóng góc nhìn 3D. <br>Mở link này trên điện thoại để trải nghiệm AR.</div>
+
+    <!-- Cụm điều khiển dưới đáy màn hình -->
+    <div id="ui-container">
+        <div class="control-group">
+            <label for="ageSlider">Tuổi cây / Chiều cao (Năm): <span id="ageVal" class="text-green-300">1</span></label>
+            <input type="range" id="ageSlider" min="1" max="50" value="1" step="1">
+        </div>
+        <div class="control-group">
+            <label for="timeSlider">Mô phỏng giờ trong ngày: <span id="timeVal" class="text-yellow-300">12:00</span></label>
+            <!-- Giảm step xuống 0.05 (3 phút) để kéo siêu mượt -->
+            <input type="range" id="timeSlider" min="5" max="19" value="12" step="0.05">
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { ARButton } from 'three/addons/webxr/ARButton.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        
+        // --- CÁC BIẾN TOÀN CỤC ---
+        let container;
+        let camera, scene, renderer, controls;
+        let controller, reticle;
+        let hitTestSource = null;
+        let hitTestSourceRequested = false;
+        
+        let treeModel = null;
+        let shadowPlane = null;
+        let gridHelper = null;
+        
+        // Cụm chứa Cây và Bóng (Neo trên mặt bàn)
+        let arAnchorGroup;
+        let treeBoxHelper;
+        let labelW, labelH, labelD; // Các nhãn kích thước 3D
+
+        // Cụm chứa Bầu trời (Quỹ đạo, nhãn giờ - Bán kính 50m, luôn đi theo người)
+        let skyGroup;
+        // Cụm chứa Nguồn sáng (Gần cây để đổ bóng nét - Luôn chiếu vào cây)
+        let lightGroup;
+        
+        let sunLight, sunSphere, sunPathTube;
+        let userLat = 21.0285, userLng = 105.8542; // Mặc định Hà Nội
+        let simulationDate = new Date();
+        // Xóa dòng gán 12h mặc định ở đây, sẽ tính toán realtime ở setupUIEvents
+        
+        // Bán kính hiển thị
+        const SKY_RADIUS = 50; 
+        const LIGHT_RADIUS = 10; 
+
+        // Biến La bàn (Compass)
+        let compassHeading = 0;
+        let isCompassActive = false;
+
+        // UI Elements
+        const ageSlider = document.getElementById('ageSlider');
+        const timeSlider = document.getElementById('timeSlider');
+        const timeDisplay = document.getElementById('time-display');
+
+        init();
+        animate();
+
+        function init() {
+            container = document.createElement('div');
+            document.body.appendChild(container);
+
+            scene = new THREE.Scene();
+            
+            // 1. Nhóm dưới đất (Cây cối)
+            arAnchorGroup = new THREE.Group();
+            scene.add(arAnchorGroup);
+
+            // 2. Nhóm trên trời (Mặt trời biểu kiến & Quỹ đạo)
+            skyGroup = new THREE.Group();
+            scene.add(skyGroup);
+
+            // 3. Nhóm ánh sáng (Đổ bóng)
+            lightGroup = new THREE.Group();
+            scene.add(lightGroup);
+
+            // Tăng tầm nhìn của Camera lên 1000m để thấy được Mặt trời 50m
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 1000);
+            camera.position.set(0, 1.5, 3);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+
+            // --- THIẾT LẬP NGUỒN SÁNG ĐỔ BÓNG (LIGHT GROUP) ---
+            sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = 1024;
+            sunLight.shadow.mapSize.height = 1024;
+            sunLight.shadow.camera.near = 0.5;
+            sunLight.shadow.camera.far = 20;
+            sunLight.shadow.camera.left = -5;
+            sunLight.shadow.camera.right = 5;
+            sunLight.shadow.camera.top = 5;
+            sunLight.shadow.camera.bottom = -5;
+            sunLight.shadow.bias = -0.001;
+            lightGroup.add(sunLight);
+            
+            // Đèn luôn chiếu vào tâm của lightGroup (nơi đặt cây)
+            lightGroup.add(sunLight.target);
+            sunLight.target.position.set(0, 0, 0);
+
+            // --- THIẾT LẬP MẶT TRỜI TRÊN TRỜI (SKY GROUP) ---
+            const sunGeo = new THREE.SphereGeometry(2, 32, 32); // Quả cầu to 2m trên trời
+            const sunMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+            sunSphere = new THREE.Mesh(sunGeo, sunMat);
+            skyGroup.add(sunSphere);
+
+            // --- THIẾT LẬP CÂY CỐI & MẶT PHẲNG (AR ANCHOR GROUP) ---
+            const planeGeo = new THREE.PlaneGeometry(20, 20);
+            planeGeo.rotateX(-Math.PI / 2);
+            const shadowMaterial = new THREE.MeshStandardMaterial({ color: 0x556b2f, roughness: 0.8 }); 
+            shadowPlane = new THREE.Mesh(planeGeo, shadowMaterial);
+            shadowPlane.receiveShadow = true;
+            arAnchorGroup.add(shadowPlane);
+
+            gridHelper = new THREE.GridHelper(20, 20, 0x000000, 0x000000);
+            gridHelper.material.opacity = 0.2;
+            gridHelper.material.transparent = true;
+            arAnchorGroup.add(gridHelper);
+
+            treeModel = createProceduralTree();
+            arAnchorGroup.add(treeModel);
+
+            treeBoxHelper = new THREE.BoxHelper(treeModel, 0x9333ea);
+            arAnchorGroup.add(treeBoxHelper);
+            
+            // Khởi tạo 3 nhãn 3D hiển thị kích thước bay quanh cây
+            labelW = createDimSprite();
+            labelH = createDimSprite();
+            labelD = createDimSprite();
+            arAnchorGroup.add(labelW);
+            arAnchorGroup.add(labelH);
+            arAnchorGroup.add(labelD);
+
+            updateTreeDimensions();
+
+            // --- RENDERER VÀ WEBXR ---
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 0.5, 0);
+            controls.update();
+
+            const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            document.body.appendChild(arButton);
+
+            // KHI BẮT ĐẦU CHẾ ĐỘ AR
+            renderer.xr.addEventListener('sessionstart', () => {
+                document.body.classList.add('ar-mode');
+                document.getElementById('desktop-hint').style.display = 'none';
+                document.getElementById('ar-hint').style.display = 'block';
+                document.getElementById('compass-btn').style.display = 'none'; 
+                
+                gridHelper.visible = false;
+                shadowPlane.material = new THREE.ShadowMaterial({ opacity: 0.5 });
+                arAnchorGroup.visible = false; // Ẩn cây chờ đặt
+
+                // QUAN TRỌNG: Đồng bộ La Bàn ngay lúc bắt đầu AR
+                if (isCompassActive) {
+                    // Xoay toàn bộ Bầu trời và Hướng Nắng khớp tuyệt đối với phương Bắc thật
+                    const rad = THREE.MathUtils.degToRad(compassHeading);
+                    skyGroup.rotation.y = rad;
+                    lightGroup.rotation.y = rad;
+                }
+            });
+            
+            renderer.xr.addEventListener('sessionend', () => {
+                document.body.classList.remove('ar-mode');
+                document.getElementById('desktop-hint').style.display = 'block';
+                document.getElementById('ar-hint').style.display = 'none';
+                
+                gridHelper.visible = true;
+                shadowPlane.material = new THREE.MeshStandardMaterial({ color: 0x556b2f, roughness: 0.8 });
+                arAnchorGroup.position.set(0,0,0);
+                arAnchorGroup.visible = true;
+                
+                skyGroup.rotation.y = 0;
+                lightGroup.rotation.y = 0;
+                updateSunPosition();
+            });
+
+            controller = renderer.xr.getController(0);
+            controller.addEventListener('select', onSelect);
+            scene.add(controller);
+
+            reticle = new THREE.Mesh(
+                new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
+                new THREE.MeshBasicMaterial({ color: 0x00ff00 })
+            );
+            reticle.matrixAutoUpdate = false;
+            reticle.visible = false;
+            scene.add(reticle);
+
+            setupUIEvents();
+            setupCompass();
+            getGPSAndInitSun();
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function setupCompass() {
+            const btn = document.getElementById('compass-btn');
+            
+            const handleOrientation = (event) => {
+                let heading = null;
+                if (event.webkitCompassHeading !== undefined) {
+                    heading = event.webkitCompassHeading; // iOS True Heading
+                } else if (event.absolute === true && event.alpha !== null) {
+                    heading = 360 - event.alpha; // Android Chrome
+                }
+                
+                if (heading !== null) {
+                    compassHeading = heading;
+                    isCompassActive = true;
+                    document.getElementById('compass-display').innerText = Math.round(heading) + '°';
+                    btn.style.display = 'none'; // Auto hide if permission granted
+                }
+            };
+
+            btn.addEventListener('click', () => {
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    DeviceOrientationEvent.requestPermission().then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation, true);
+                        } else {
+                            alert("Bạn đã từ chối quyền la bàn. Hãy tải lại trang và cấp quyền.");
+                        }
+                    }).catch(console.error);
+                } else {
+                    window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+                    window.addEventListener('deviceorientation', handleOrientation, true);
+                }
+            });
+
+            // Tự lấy quyền cho Android
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission !== 'function') {
+                window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+                window.addEventListener('deviceorientation', handleOrientation, true);
+            }
+        }
+
+        function updateTreeDimensions() {
+            if (!treeModel || !treeBoxHelper) return;
+            treeBoxHelper.update();
+            const box = new THREE.Box3().setFromObject(treeModel);
+            const size = new THREE.Vector3();
+            box.getSize(size);
+            
+            document.getElementById('dim-x').innerText = size.x.toFixed(2);
+            document.getElementById('dim-y').innerText = size.y.toFixed(2);
+            document.getElementById('dim-z').innerText = size.z.toFixed(2);
+
+            // Cập nhật giá trị và vị trí Nhãn 3D
+            if (labelW && labelH && labelD) {
+                updateLabelSprite(labelW, `R: ${size.x.toFixed(2)}m`);
+                updateLabelSprite(labelH, `C: ${size.y.toFixed(2)}m`);
+                updateLabelSprite(labelD, `S: ${size.z.toFixed(2)}m`);
+
+                // Neo nhãn vào các góc/cạnh của Box
+                labelW.position.set(0, 0.05, size.z / 2 + 0.1);
+                labelH.position.set(size.x / 2 + 0.1, size.y / 2, 0);
+                labelD.position.set(size.x / 2 + 0.1, 0.05, size.z / 2);
+            }
+        }
+
+        // Tạo khung chứa nhãn 3D (Rộng, Cao, Sâu)
+        function createDimSprite() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 64;
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.minFilter = THREE.LinearFilter;
+            const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+            const sprite = new THREE.Sprite(material);
+            sprite.scale.set(0.6, 0.15, 1);
+            sprite.renderOrder = 999; // Luôn hiển thị nổi lên trên cùng
+            return sprite;
+        }
+
+        // Vẽ chữ thông số lên nhãn 3D
+        function updateLabelSprite(sprite, message) {
+            const canvas = sprite.material.map.image;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = 'rgba(147, 51, 234, 0.8)'; // Tím nhạt giống box helper
+            if (ctx.roundRect) {
+                ctx.roundRect(10, 10, 236, 44, 8);
+            } else {
+                ctx.fillRect(10, 10, 236, 44);
+            }
+            ctx.fill();
+            
+            ctx.font = 'bold 26px monospace';
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(message, 128, 32);
+            
+            sprite.material.map.needsUpdate = true;
+        }
+
+        // Tạo bảng chữ to hơn nhiều cho cự ly 50m
+        function createTextSprite(message) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            if (ctx.roundRect) {
+                ctx.roundRect(28, 28, 200, 72, 16);
+            } else {
+                ctx.fillRect(28, 28, 200, 72);
+            }
+            ctx.fill();
+            
+            ctx.font = 'bold 44px sans-serif';
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(message, 128, 64);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+            const sprite = new THREE.Sprite(spriteMaterial);
+            // Phóng to 10 lần để nhìn từ 50m vẫn rõ
+            sprite.scale.set(10, 5, 1);
+            return sprite;
+        }
+
+        function createProceduralTree() {
+            const group = new THREE.Group();
+            const trunkGeo = new THREE.CylinderGeometry(0.04, 0.08, 0.5, 8);
+            const trunkMat = new THREE.MeshLambertMaterial({ color: 0x5c4033 });
+            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+            trunk.position.y = 0.25;
+            trunk.castShadow = true;
+            trunk.receiveShadow = true;
+            group.add(trunk);
+
+            const leavesMat = new THREE.MeshLambertMaterial({ color: 0x2e8b57 });
+            for(let i=0; i<3; i++) {
+                const leavesGeo = new THREE.ConeGeometry(0.3 - (i*0.06), 0.5, 8);
+                const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+                leaves.position.y = 0.5 + (i * 0.25);
+                leaves.castShadow = true;
+                leaves.receiveShadow = true;
+                group.add(leaves);
+            }
+            return group;
+        }
+
+        function onSelect() {
+            if (reticle.visible) {
+                arAnchorGroup.visible = true;
+                arAnchorGroup.position.setFromMatrixPosition(reticle.matrix);
+            }
+        }
+
+        function setupUIEvents() {
+            // Lấy giờ hệ thống khởi tạo
+            const now = new Date();
+            let currentHour = now.getHours() + (now.getMinutes() / 60);
+            if (currentHour < 5 || currentHour > 19) {
+                currentHour = 12; // Ngoài vùng hiển thị thì reset về 12h
+            }
+            timeSlider.value = currentHour;
+            
+            // Hàm Helper để update hiển thị giờ
+            const updateTimeDisplay = (val) => {
+                const hours = Math.floor(val);
+                const mins = Math.floor((val - hours) * 60);
+                const timeStr = `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+                document.getElementById('timeVal').innerText = timeStr;
+                timeDisplay.innerText = timeStr;
+                simulationDate.setHours(hours);
+                simulationDate.setMinutes(mins);
+            };
+            
+            // Chạy lần đầu
+            updateTimeDisplay(currentHour);
+
+            ageSlider.addEventListener('input', (e) => {
+                const age = parseFloat(e.target.value);
+                document.getElementById('ageVal').innerText = age;
+                if (treeModel) {
+                    const scaleFactor = 1 + (age * 0.08); 
+                    treeModel.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                    updateTreeDimensions();
+                }
+            });
+
+            timeSlider.addEventListener('input', (e) => {
+                updateTimeDisplay(parseFloat(e.target.value));
+                updateSunPosition();
+            });
+        }
+
+        function getGPSAndInitSun() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        userLat = position.coords.latitude;
+                        userLng = position.coords.longitude;
+                        document.getElementById('loc-display').innerText = `${userLat.toFixed(2)}, ${userLng.toFixed(2)}`;
+                        document.getElementById('loading-gps').style.display = 'none';
+                        updateSunPosition();
+                        drawSunPath();
+                    },
+                    (error) => {
+                        document.getElementById('loc-display').innerText = `Hà Nội (Mặc định)`;
+                        document.getElementById('loading-gps').style.display = 'none';
+                        updateSunPosition();
+                        drawSunPath();
+                    }
+                );
+            }
+        }
+
+        function updateSunPosition() {
+            if (!window.SunCalc) return;
+
+            const sunPos = SunCalc.getPosition(simulationDate, userLat, userLng);
+            
+            // Tọa độ 3D cơ bản (X: Đông, Z: Nam, Y: Cao)
+            const getDir = (radius) => {
+                return {
+                    x: radius * Math.cos(sunPos.altitude) * -Math.sin(sunPos.azimuth),
+                    y: radius * Math.sin(sunPos.altitude),
+                    z: radius * Math.cos(sunPos.altitude) * Math.cos(sunPos.azimuth)
+                };
+            };
+
+            // Vị trí quả cầu Mặt trời (xa 50m)
+            const skyDir = getDir(SKY_RADIUS);
+            sunSphere.position.set(skyDir.x, skyDir.y, skyDir.z);
+
+            // Vị trí nguồn sáng đổ bóng (xa 10m so với cây)
+            const lightDir = getDir(LIGHT_RADIUS);
+            sunLight.position.set(lightDir.x, lightDir.y, lightDir.z);
+
+            // Đổi màu mặt trời khi lặn
+            if (skyDir.y < 0) {
+                sunLight.intensity = 0;
+                sunSphere.material.color.setHex(0x333333);
+            } else {
+                sunLight.intensity = 1.5;
+                const colorLerp = Math.max(0, Math.min(1, sunPos.altitude / (Math.PI/4)));
+                const color = new THREE.Color().lerpColors(new THREE.Color(0xff8c00), new THREE.Color(0xffffff), colorLerp);
+                sunLight.color.copy(color);
+                sunSphere.material.color.copy(color);
+            }
+        }
+
+        function drawSunPath() {
+            if (!window.SunCalc) return;
+            
+            // Xóa đường cũ để vẽ lại
+            const toRemove = skyGroup.children.filter(c => c !== sunSphere);
+            toRemove.forEach(child => {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) child.material.dispose();
+                skyGroup.remove(child);
+            });
+
+            const points = [];
+            const tempDate = new Date(simulationDate);
+            
+            for(let h = 5; h <= 19; h += 0.25) {
+                tempDate.setHours(Math.floor(h));
+                tempDate.setMinutes((h % 1) * 60);
+                const pos = SunCalc.getPosition(tempDate, userLat, userLng);
+                
+                const x = SKY_RADIUS * Math.cos(pos.altitude) * -Math.sin(pos.azimuth);
+                const y = SKY_RADIUS * Math.sin(pos.altitude);
+                const z = SKY_RADIUS * Math.cos(pos.altitude) * Math.cos(pos.azimuth);
+                points.push(new THREE.Vector3(x, y, z));
+            }
+
+            // Vẽ đường ống to ở bán kính 50m
+            const curve = new THREE.CatmullRomCurve3(points);
+            const tubeGeo = new THREE.TubeGeometry(curve, 64, 0.1, 8, false);
+            const tubeMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.6 });
+            const tubePath = new THREE.Mesh(tubeGeo, tubeMat);
+            skyGroup.add(tubePath);
+
+            const markerGeo = new THREE.SphereGeometry(0.5, 16, 16);
+            const markerMat = new THREE.MeshBasicMaterial({ color: 0xff4400 });
+
+            // Gắn mốc giờ
+            for(let h = 5; h <= 19; h++) {
+                tempDate.setHours(h);
+                tempDate.setMinutes(0);
+                const pos = SunCalc.getPosition(tempDate, userLat, userLng);
+                
+                const x = SKY_RADIUS * Math.cos(pos.altitude) * -Math.sin(pos.azimuth);
+                const y = SKY_RADIUS * Math.sin(pos.altitude);
+                const z = SKY_RADIUS * Math.cos(pos.altitude) * Math.cos(pos.azimuth);
+
+                const marker = new THREE.Mesh(markerGeo, markerMat);
+                marker.position.set(x, y, z);
+                skyGroup.add(marker);
+
+                const sprite = createTextSprite(`${h}:00`);
+                // Nhấc bảng lên cao hơn một chút so với marker
+                sprite.position.set(x, y + 2.5, z);
+                skyGroup.add(sprite);
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            renderer.setAnimationLoop(render);
+        }
+
+        function render(timestamp, frame) {
+            if (controls) controls.update();
+
+            // CỐT LÕI: Gắn Bầu trời vào Camera, Gắn Đèn chiếu vào Cây
+            if (renderer.xr.isPresenting) {
+                // Tâm của hệ mặt trời luôn nằm ngay tại camera (mắt người)
+                skyGroup.position.copy(camera.position);
+                
+                if (arAnchorGroup.visible) {
+                    // Tâm ánh sáng luôn nằm tại cây
+                    lightGroup.position.copy(arAnchorGroup.position);
+                }
+            } else {
+                skyGroup.position.copy(controls.target);
+                lightGroup.position.copy(arAnchorGroup.position);
+            }
+
+            if (frame) {
+                const referenceSpace = renderer.xr.getReferenceSpace();
+                const session = renderer.xr.getSession();
+
+                if (hitTestSourceRequested === false) {
+                    session.requestReferenceSpace('viewer').then(function (referenceSpace) {
+                        session.requestHitTestSource({ space: referenceSpace }).then(function (source) {
+                            hitTestSource = source;
+                        });
+                    });
+                    session.addEventListener('end', function () {
+                        hitTestSourceRequested = false;
+                        hitTestSource = null;
+                    });
+                    hitTestSourceRequested = true;
+                }
+
+                if (hitTestSource) {
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    if (hitTestResults.length > 0) {
+                        const hit = hitTestResults[0];
+                        reticle.visible = true;
+                        reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+                    } else {
+                        reticle.visible = false;
+                    }
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
