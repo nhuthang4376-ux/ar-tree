@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>AR Tree & Sun Simulation</title>
-    <!-- Tailwind CSS cho UI -->
+    <!-- Tailwind CSS for UI -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- SunCalc library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
@@ -16,13 +16,13 @@
             padding: 20px; box-sizing: border-box;
             background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0));
             z-index: 10;
-            pointer-events: none; /* Ngăn container block cảm ứng màn hình */
+            pointer-events: none; /* Prevent container from blocking touch events */
         }
         .ar-mode #ui-container { padding-bottom: 70px; }
         
         .control-group { pointer-events: auto; margin-bottom: 15px; }
         .control-group label { color: white; display: block; margin-bottom: 5px; font-weight: bold; text-shadow: 1px 1px 2px black; font-size: 14px; }
-        /* Thêm touch-action và pointer-events để chống freeze thanh trượt trên iOS */
+        /* Add touch-action to prevent slider freezing on iOS */
         input[type=range] { width: 100%; accent-color: #4ade80; pointer-events: auto; touch-action: pan-x; }
         
         #info-panel {
@@ -49,7 +49,7 @@
         }
     </style>
 
-    <!-- Import bản đồ cho Three.js -->
+    <!-- Import map for Three.js -->
     <script type="importmap">
         {
             "imports": {
@@ -61,35 +61,34 @@
 </head>
 <body>
 
-    <!-- Bảng thông tin -->
+    <!-- Information Panel -->
     <div id="info-panel">
-        <div class="font-bold border-b border-gray-500 pb-1 mb-1 text-green-400">Dữ Liệu Ánh Sáng <span id="loading-gps" class="text-xs text-yellow-400 font-normal ml-2">(Đang định vị...)</span></div>
-        <div>Tọa độ: <span id="loc-display">Đang tải...</span></div>
-        <div>La bàn: <span id="compass-display" class="text-blue-300">Chưa cấp quyền</span> (Auto)</div>
-        <div>Thời gian mô phỏng: <span id="time-display" class="font-bold text-lg text-yellow-300">12:00</span></div>
+        <div class="font-bold border-b border-gray-500 pb-1 mb-1 text-green-400">Sunlight Data <span id="loading-gps" class="text-xs text-yellow-400 font-normal ml-2">(Locating...)</span></div>
+        <div>Coordinates: <span id="loc-display">Loading...</span></div>
+        <div>Compass: <span id="compass-display" class="text-blue-300">Not Granted</span> (Auto)</div>
+        <div>Simulated Time: <span id="time-display" class="font-bold text-lg text-yellow-300">12:00</span></div>
         
-        <div class="font-bold border-b border-gray-500 pb-1 mb-1 mt-2 text-purple-400">Kích Thước 3D (Bounding Box)</div>
+        <div class="font-bold border-b border-gray-500 pb-1 mb-1 mt-2 text-purple-400">3D Dimensions</div>
         <div class="flex mt-1">
-            <span class="dim-badge">Rộng: <span id="dim-x">0.00</span>m</span>
-            <span class="dim-badge">Cao: <span id="dim-y">0.00</span>m</span>
-            <span class="dim-badge">Sâu: <span id="dim-z">0.00</span>m</span>
+            <span class="dim-badge">W: <span id="dim-x">0.00</span>m</span>
+            <span class="dim-badge">H: <span id="dim-y">0.00</span>m</span>
+            <span class="dim-badge">D: <span id="dim-z">0.00</span>m</span>
         </div>
 
-        <button id="compass-btn">Kích hoạt La bàn (Bắt buộc cho iOS)</button>
-        <div id="ar-hint" class="text-xs text-gray-300 mt-2 hidden">*AR: Chạm vào mặt phẳng có dấu tròn để đặt cây. Nhìn lên trời để thấy quỹ đạo nắng.</div>
+        <button id="compass-btn">Enable Compass (Required for iOS)</button>
+        <div id="ar-hint" class="text-xs text-gray-300 mt-2 hidden">*AR: Tap the circular reticle to place the tree. Look up to see the sun path.</div>
     </div>
 
-    <div id="desktop-hint">Dùng chuột để xoay/thu phóng góc nhìn 3D. <br>Mở link này trên điện thoại để trải nghiệm AR.</div>
+    <div id="desktop-hint">Use your mouse to rotate/zoom the 3D view. <br>Open this link on a mobile device to experience AR.</div>
 
-    <!-- Cụm điều khiển dưới đáy màn hình -->
+    <!-- UI Controls -->
     <div id="ui-container">
         <div class="control-group">
-            <label for="ageSlider">Tuổi cây / Chiều cao (Năm): <span id="ageVal" class="text-green-300">1</span></label>
+            <label for="ageSlider">Tree Age / Height (Years): <span id="ageVal" class="text-green-300">1</span></label>
             <input type="range" id="ageSlider" min="1" max="50" value="1" step="1">
         </div>
         <div class="control-group">
-            <label for="timeSlider">Mô phỏng giờ trong ngày: <span id="timeVal" class="text-yellow-300">12:00</span></label>
-            <!-- Giảm step xuống 0.05 (3 phút) để kéo siêu mượt -->
+            <label for="timeSlider">Simulate Time of Day: <span id="timeVal" class="text-yellow-300">12:00</span></label>
             <input type="range" id="timeSlider" min="5" max="19" value="12" step="0.05">
         </div>
     </div>
@@ -99,7 +98,7 @@
         import { ARButton } from 'three/addons/webxr/ARButton.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         
-        // --- CÁC BIẾN TOÀN CỤC ---
+        // --- GLOBAL VARIABLES ---
         let container;
         let camera, scene, renderer, controls;
         let controller, reticle;
@@ -110,26 +109,25 @@
         let shadowPlane = null;
         let gridHelper = null;
         
-        // Cụm chứa Cây và Bóng (Neo trên mặt bàn)
+        // Group containing the Tree and Shadow (Anchored to surface)
         let arAnchorGroup;
         let treeBoxHelper;
-        let labelW, labelH, labelD; // Các nhãn kích thước 3D
+        let labelW, labelH, labelD; // 3D Dimension Labels
 
-        // Cụm chứa Bầu trời (Quỹ đạo, nhãn giờ - Bán kính 50m, luôn đi theo người)
+        // Group containing the Sky (Sun path, hour markers - Radius 50m, follows user)
         let skyGroup;
-        // Cụm chứa Nguồn sáng (Gần cây để đổ bóng nét - Luôn chiếu vào cây)
+        // Group containing the Lighting (Close to tree for sharp shadows)
         let lightGroup;
         
         let sunLight, sunSphere, sunPathTube;
-        let userLat = 21.0285, userLng = 105.8542; // Mặc định Hà Nội
+        let userLat = 39.1031, userLng = -84.5120; // Default to Cincinnati
         let simulationDate = new Date();
-        // Xóa dòng gán 12h mặc định ở đây, sẽ tính toán realtime ở setupUIEvents
         
-        // Bán kính hiển thị
+        // Display Radii
         const SKY_RADIUS = 50; 
         const LIGHT_RADIUS = 10; 
 
-        // Biến La bàn (Compass)
+        // Compass Variables
         let compassHeading = 0;
         let isCompassActive = false;
 
@@ -147,26 +145,26 @@
 
             scene = new THREE.Scene();
             
-            // 1. Nhóm dưới đất (Cây cối)
+            // 1. Ground Group (Tree & Shadows)
             arAnchorGroup = new THREE.Group();
             scene.add(arAnchorGroup);
 
-            // 2. Nhóm trên trời (Mặt trời biểu kiến & Quỹ đạo)
+            // 2. Sky Group (Apparent Sun & Path)
             skyGroup = new THREE.Group();
             scene.add(skyGroup);
 
-            // 3. Nhóm ánh sáng (Đổ bóng)
+            // 3. Lighting Group (Shadow casting)
             lightGroup = new THREE.Group();
             scene.add(lightGroup);
 
-            // Tăng tầm nhìn của Camera lên 1000m để thấy được Mặt trời 50m
+            // Increase Camera far clipping plane to 1000m to see the 50m Sun
             camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 1000);
             camera.position.set(0, 1.5, 3);
 
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
             scene.add(ambientLight);
 
-            // --- THIẾT LẬP NGUỒN SÁNG ĐỔ BÓNG (LIGHT GROUP) ---
+            // --- SHADOW CASTING LIGHT SETUP ---
             sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
             sunLight.castShadow = true;
             sunLight.shadow.mapSize.width = 1024;
@@ -180,17 +178,17 @@
             sunLight.shadow.bias = -0.001;
             lightGroup.add(sunLight);
             
-            // Đèn luôn chiếu vào tâm của lightGroup (nơi đặt cây)
+            // Light always points to the center of lightGroup (where tree is placed)
             lightGroup.add(sunLight.target);
             sunLight.target.position.set(0, 0, 0);
 
-            // --- THIẾT LẬP MẶT TRỜI TRÊN TRỜI (SKY GROUP) ---
-            const sunGeo = new THREE.SphereGeometry(2, 32, 32); // Quả cầu to 2m trên trời
+            // --- SKY SUN SETUP ---
+            const sunGeo = new THREE.SphereGeometry(2, 32, 32); // 2m large sphere in the sky
             const sunMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
             sunSphere = new THREE.Mesh(sunGeo, sunMat);
             skyGroup.add(sunSphere);
 
-            // --- THIẾT LẬP CÂY CỐI & MẶT PHẲNG (AR ANCHOR GROUP) ---
+            // --- TREE & SHADOW PLANE SETUP (AR ANCHOR) ---
             const planeGeo = new THREE.PlaneGeometry(20, 20);
             planeGeo.rotateX(-Math.PI / 2);
             const shadowMaterial = new THREE.MeshStandardMaterial({ color: 0x556b2f, roughness: 0.8 }); 
@@ -209,7 +207,7 @@
             treeBoxHelper = new THREE.BoxHelper(treeModel, 0x9333ea);
             arAnchorGroup.add(treeBoxHelper);
             
-            // Khởi tạo 3 nhãn 3D hiển thị kích thước bay quanh cây
+            // Initialize 3D dimension labels
             labelW = createDimSprite();
             labelH = createDimSprite();
             labelD = createDimSprite();
@@ -219,7 +217,7 @@
 
             updateTreeDimensions();
 
-            // --- RENDERER VÀ WEBXR ---
+            // --- RENDERER & WEBXR ---
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -235,7 +233,7 @@
             const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
             document.body.appendChild(arButton);
 
-            // KHI BẮT ĐẦU CHẾ ĐỘ AR
+            // WHEN AR SESSION STARTS
             renderer.xr.addEventListener('sessionstart', () => {
                 document.body.classList.add('ar-mode');
                 document.getElementById('desktop-hint').style.display = 'none';
@@ -244,22 +242,24 @@
                 
                 gridHelper.visible = false;
                 shadowPlane.material = new THREE.ShadowMaterial({ opacity: 0.5 });
-                arAnchorGroup.visible = false; // Ẩn cây chờ đặt
+                arAnchorGroup.visible = false; // Hide tree until user places it
 
-                // QUAN TRỌNG: Đồng bộ La Bàn ngay lúc bắt đầu AR
+                // CRITICAL: Sync Compass on AR Start
                 if (isCompassActive) {
-                    // Xoay toàn bộ Bầu trời và Hướng Nắng khớp tuyệt đối với phương Bắc thật
+                    // Rotate the entire Sky and Lighting to match True North
                     const rad = THREE.MathUtils.degToRad(compassHeading);
                     skyGroup.rotation.y = rad;
                     lightGroup.rotation.y = rad;
                 }
             });
             
+            // WHEN AR SESSION ENDS (Fixes the white screen issue)
             renderer.xr.addEventListener('sessionend', () => {
                 document.body.classList.remove('ar-mode');
                 document.getElementById('desktop-hint').style.display = 'block';
                 document.getElementById('ar-hint').style.display = 'none';
                 
+                // Restore desktop environment
                 gridHelper.visible = true;
                 shadowPlane.material = new THREE.MeshStandardMaterial({ color: 0x556b2f, roughness: 0.8 });
                 arAnchorGroup.position.set(0,0,0);
@@ -267,6 +267,16 @@
                 
                 skyGroup.rotation.y = 0;
                 lightGroup.rotation.y = 0;
+
+                // WHITE SCREEN FIX: Reset camera position and force layout recalculation
+                camera.position.set(0, 1.5, 3);
+                camera.updateProjectionMatrix();
+                if (controls) {
+                    controls.target.set(0, 0.5, 0);
+                    controls.update();
+                }
+                onWindowResize(); // Force renderer to recalculate dimensions properly
+
                 updateSunPosition();
             });
 
@@ -314,7 +324,7 @@
                         if (permissionState === 'granted') {
                             window.addEventListener('deviceorientation', handleOrientation, true);
                         } else {
-                            alert("Bạn đã từ chối quyền la bàn. Hãy tải lại trang và cấp quyền.");
+                            alert("Compass permission denied. Please reload the page and try again.");
                         }
                     }).catch(console.error);
                 } else {
@@ -323,7 +333,7 @@
                 }
             });
 
-            // Tự lấy quyền cho Android
+            // Auto-request for Android devices
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission !== 'function') {
                 window.addEventListener('deviceorientationabsolute', handleOrientation, true);
                 window.addEventListener('deviceorientation', handleOrientation, true);
@@ -341,20 +351,20 @@
             document.getElementById('dim-y').innerText = size.y.toFixed(2);
             document.getElementById('dim-z').innerText = size.z.toFixed(2);
 
-            // Cập nhật giá trị và vị trí Nhãn 3D
+            // Update 3D Label values and positions
             if (labelW && labelH && labelD) {
-                updateLabelSprite(labelW, `R: ${size.x.toFixed(2)}m`);
-                updateLabelSprite(labelH, `C: ${size.y.toFixed(2)}m`);
-                updateLabelSprite(labelD, `S: ${size.z.toFixed(2)}m`);
+                updateLabelSprite(labelW, `W: ${size.x.toFixed(2)}m`);
+                updateLabelSprite(labelH, `H: ${size.y.toFixed(2)}m`);
+                updateLabelSprite(labelD, `D: ${size.z.toFixed(2)}m`);
 
-                // Neo nhãn vào các góc/cạnh của Box
+                // Anchor labels to box corners/edges
                 labelW.position.set(0, 0.05, size.z / 2 + 0.1);
                 labelH.position.set(size.x / 2 + 0.1, size.y / 2, 0);
                 labelD.position.set(size.x / 2 + 0.1, 0.05, size.z / 2);
             }
         }
 
-        // Tạo khung chứa nhãn 3D (Rộng, Cao, Sâu)
+        // Create container for 3D Dimension Labels (W, H, D)
         function createDimSprite() {
             const canvas = document.createElement('canvas');
             canvas.width = 256;
@@ -364,17 +374,17 @@
             const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
             const sprite = new THREE.Sprite(material);
             sprite.scale.set(0.6, 0.15, 1);
-            sprite.renderOrder = 999; // Luôn hiển thị nổi lên trên cùng
+            sprite.renderOrder = 999; // Always render on top
             return sprite;
         }
 
-        // Vẽ chữ thông số lên nhãn 3D
+        // Draw text onto 3D Labels
         function updateLabelSprite(sprite, message) {
             const canvas = sprite.material.map.image;
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            ctx.fillStyle = 'rgba(147, 51, 234, 0.8)'; // Tím nhạt giống box helper
+            ctx.fillStyle = 'rgba(147, 51, 234, 0.8)'; // Light purple matching box helper
             if (ctx.roundRect) {
                 ctx.roundRect(10, 10, 236, 44, 8);
             } else {
@@ -391,7 +401,7 @@
             sprite.material.map.needsUpdate = true;
         }
 
-        // Tạo bảng chữ to hơn nhiều cho cự ly 50m
+        // Create large text billboards for 50m distance
         function createTextSprite(message) {
             const canvas = document.createElement('canvas');
             canvas.width = 256;
@@ -415,7 +425,7 @@
             const texture = new THREE.CanvasTexture(canvas);
             const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
             const sprite = new THREE.Sprite(spriteMaterial);
-            // Phóng to 10 lần để nhìn từ 50m vẫn rõ
+            // Scale up 10x to remain visible from 50m away
             sprite.scale.set(10, 5, 1);
             return sprite;
         }
@@ -450,15 +460,15 @@
         }
 
         function setupUIEvents() {
-            // Lấy giờ hệ thống khởi tạo
+            // Get initial system time
             const now = new Date();
             let currentHour = now.getHours() + (now.getMinutes() / 60);
             if (currentHour < 5 || currentHour > 19) {
-                currentHour = 12; // Ngoài vùng hiển thị thì reset về 12h
+                currentHour = 12; // Reset to 12PM if out of bounds (night time)
             }
             timeSlider.value = currentHour;
             
-            // Hàm Helper để update hiển thị giờ
+            // Helper function to update time displays
             const updateTimeDisplay = (val) => {
                 const hours = Math.floor(val);
                 const mins = Math.floor((val - hours) * 60);
@@ -469,7 +479,7 @@
                 simulationDate.setMinutes(mins);
             };
             
-            // Chạy lần đầu
+            // Run on initial load
             updateTimeDisplay(currentHour);
 
             ageSlider.addEventListener('input', (e) => {
@@ -500,7 +510,7 @@
                         drawSunPath();
                     },
                     (error) => {
-                        document.getElementById('loc-display').innerText = `Hà Nội (Mặc định)`;
+                        document.getElementById('loc-display').innerText = `Cincinnati (Default)`;
                         document.getElementById('loading-gps').style.display = 'none';
                         updateSunPosition();
                         drawSunPath();
@@ -514,7 +524,7 @@
 
             const sunPos = SunCalc.getPosition(simulationDate, userLat, userLng);
             
-            // Tọa độ 3D cơ bản (X: Đông, Z: Nam, Y: Cao)
+            // Base 3D Coordinates (X: East, Z: South, Y: Up)
             const getDir = (radius) => {
                 return {
                     x: radius * Math.cos(sunPos.altitude) * -Math.sin(sunPos.azimuth),
@@ -523,15 +533,15 @@
                 };
             };
 
-            // Vị trí quả cầu Mặt trời (xa 50m)
+            // Sun Sphere position (50m away)
             const skyDir = getDir(SKY_RADIUS);
             sunSphere.position.set(skyDir.x, skyDir.y, skyDir.z);
 
-            // Vị trí nguồn sáng đổ bóng (xa 10m so với cây)
+            // Shadow Casting Light position (10m away from tree)
             const lightDir = getDir(LIGHT_RADIUS);
             sunLight.position.set(lightDir.x, lightDir.y, lightDir.z);
 
-            // Đổi màu mặt trời khi lặn
+            // Change sun color/intensity during sunset
             if (skyDir.y < 0) {
                 sunLight.intensity = 0;
                 sunSphere.material.color.setHex(0x333333);
@@ -547,7 +557,7 @@
         function drawSunPath() {
             if (!window.SunCalc) return;
             
-            // Xóa đường cũ để vẽ lại
+            // Clear old path to redraw
             const toRemove = skyGroup.children.filter(c => c !== sunSphere);
             toRemove.forEach(child => {
                 if (child.geometry) child.geometry.dispose();
@@ -569,7 +579,7 @@
                 points.push(new THREE.Vector3(x, y, z));
             }
 
-            // Vẽ đường ống to ở bán kính 50m
+            // Draw thick tube at 50m radius
             const curve = new THREE.CatmullRomCurve3(points);
             const tubeGeo = new THREE.TubeGeometry(curve, 64, 0.1, 8, false);
             const tubeMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.6 });
@@ -579,7 +589,7 @@
             const markerGeo = new THREE.SphereGeometry(0.5, 16, 16);
             const markerMat = new THREE.MeshBasicMaterial({ color: 0xff4400 });
 
-            // Gắn mốc giờ
+            // Attach hour markers
             for(let h = 5; h <= 19; h++) {
                 tempDate.setHours(h);
                 tempDate.setMinutes(0);
@@ -594,7 +604,7 @@
                 skyGroup.add(marker);
 
                 const sprite = createTextSprite(`${h}:00`);
-                // Nhấc bảng lên cao hơn một chút so với marker
+                // Elevate label slightly above the marker
                 sprite.position.set(x, y + 2.5, z);
                 skyGroup.add(sprite);
             }
@@ -613,13 +623,13 @@
         function render(timestamp, frame) {
             if (controls) controls.update();
 
-            // CỐT LÕI: Gắn Bầu trời vào Camera, Gắn Đèn chiếu vào Cây
+            // CORE MECHANIC: Anchor Sky to Camera, Anchor Light to Tree
             if (renderer.xr.isPresenting) {
-                // Tâm của hệ mặt trời luôn nằm ngay tại camera (mắt người)
+                // Solar system center is always exactly at the camera (user's eyes)
                 skyGroup.position.copy(camera.position);
                 
                 if (arAnchorGroup.visible) {
-                    // Tâm ánh sáng luôn nằm tại cây
+                    // Light center is always at the tree
                     lightGroup.position.copy(arAnchorGroup.position);
                 }
             } else {
